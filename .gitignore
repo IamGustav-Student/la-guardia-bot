@@ -1,0 +1,9 @@
+# Archivos de ambiente y credenciales - NUNCA subir a GitHub
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python

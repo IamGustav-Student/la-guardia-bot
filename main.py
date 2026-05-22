@@ -25,6 +25,16 @@ class MasterBot(discord.Client):
             "🎮": "〔 🎮 〕Pro Gamer",
             "🔔": "〔 🔔 〕Notificaciones"
         }
+        # Cargar repositorio persistente o usar el valor por defecto
+        self.config_path = "active_repo.txt"
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    self.github_repo = f.read().strip()
+            except Exception:
+                self.github_repo = os.environ.get("GITHUB_REPO", "IamGustav-Student/GymSaaS")
+        else:
+            self.github_repo = os.environ.get("GITHUB_REPO", "IamGustav-Student/GymSaaS")
 
     async def on_ready(self):
         print(f"[OK] Master Bot activo como {self.user}")
@@ -62,7 +72,7 @@ class MasterBot(discord.Client):
             body = parts[1].strip() if len(parts) > 1 else f"Creada desde Discord por {message.author}"
 
             async with aiohttp.ClientSession() as session:
-                url = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
+                url = f"https://api.github.com/repos/{self.github_repo}/issues"
                 headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
                 async with session.post(url, headers=headers, json={"title": title, "body": body}) as resp:
                     if resp.status == 201:
@@ -78,25 +88,71 @@ class MasterBot(discord.Client):
                     else:
                         await message.channel.send("❌ Error al conectar con GitHub.")
 
-        # Comando !repo (últimos 3 commits)
-        if message.content == "!repo":
-            async with aiohttp.ClientSession() as session:
-                url = f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=3"
-                headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status == 200:
-                        commits = await resp.json()
-                        embed = discord.Embed(
-                            title=f"🚀 Últimos cambios en {GITHUB_REPO}",
-                            color=discord.Color.blue()
-                        )
-                        for c in commits:
-                            msg = c["commit"]["message"].split("\n")[0]
-                            author = c["commit"]["author"]["name"]
-                            embed.add_field(name=msg, value=f"por **{author}**", inline=False)
-                        await message.channel.send(embed=embed)
-                    else:
-                        await message.channel.send("❌ No se pudo obtener info del repo.")
+        # Comando !repo [usuario/proyecto] o !repo para ver el actual
+        if message.content.startswith("!repo"):
+            args = message.content[5:].strip()
+            if args:
+                # Cambiar de repositorio
+                if "/" not in args or len(args.split("/")) != 2:
+                    await message.channel.send("❌ Formato incorrecto. Uso: `!repo usuario/repositorio` o simplemente `!repo` para ver el actual.")
+                    return
+
+                old_repo = self.github_repo
+                self.github_repo = args
+
+                async with aiohttp.ClientSession() as session:
+                    url = f"https://api.github.com/repos/{self.github_repo}/commits?per_page=3"
+                    headers = {}
+                    if GITHUB_TOKEN:
+                        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            # Guardar en disco para persistencia
+                            try:
+                                with open(self.config_path, "w", encoding="utf-8") as f:
+                                    f.write(self.github_repo)
+                            except Exception as e:
+                                print(f"[ERROR] No se pudo guardar la configuración: {e}")
+
+                            await message.channel.send(f"✅ Repositorio de trabajo cambiado a: `{self.github_repo}`")
+                            commits = await resp.json()
+                            embed = discord.Embed(
+                                title=f"🚀 Últimos cambios en {self.github_repo}",
+                                url=f"https://github.com/{self.github_repo}",
+                                color=discord.Color.blue()
+                            )
+                            for c in commits:
+                                msg = c["commit"]["message"].split("\n")[0]
+                                author = c["commit"]["author"]["name"]
+                                embed.add_field(name=msg, value=f"por **{author}**", inline=False)
+                            await message.channel.send(embed=embed)
+                        else:
+                            # Revertir si falla la conexión o no existe
+                            self.github_repo = old_repo
+                            await message.channel.send(f"❌ Error al conectar con `{args}`. ¿Existe el repositorio y es público? Se ha mantenido el repositorio anterior: `{self.github_repo}`.")
+            else:
+                # Ver repositorio actual
+                async with aiohttp.ClientSession() as session:
+                    url = f"https://api.github.com/repos/{self.github_repo}/commits?per_page=3"
+                    headers = {}
+                    if GITHUB_TOKEN:
+                        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            commits = await resp.json()
+                            embed = discord.Embed(
+                                title=f"🚀 Repositorio activo: {self.github_repo}",
+                                url=f"https://github.com/{self.github_repo}",
+                                color=discord.Color.blue(),
+                                description="Usa `!repo usuario/repositorio` para cambiar el repositorio de trabajo."
+                            )
+                            for c in commits:
+                                msg = c["commit"]["message"].split("\n")[0]
+                                author = c["commit"]["author"]["name"]
+                                embed.add_field(name=msg, value=f"por **{author}**", inline=False)
+                            await message.channel.send(embed=embed)
+                        else:
+                            await message.channel.send(f"❌ No se pudo obtener información del repositorio activo `{self.github_repo}`.")
 
         # Hilos automáticos en Showcase
         if message.channel.id == SHOWCASE_CH_ID:

@@ -27,10 +27,17 @@ class MasterBot(discord.Client):
         }
         # Cargar repositorio persistente o usar el valor por defecto
         self.config_path = "active_repo.txt"
+        self.github_branch = None
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
-                    self.github_repo = f.read().strip()
+                    content = f.read().strip()
+                    if ":" in content:
+                        parts = content.split(":", 1)
+                        self.github_repo = parts[0]
+                        self.github_branch = parts[1] if parts[1] else None
+                    else:
+                        self.github_repo = content
             except Exception:
                 self.github_repo = os.environ.get("GITHUB_REPO", "IamGustav-Student/GymSaaS")
         else:
@@ -98,16 +105,38 @@ class MasterBot(discord.Client):
         if message.content.startswith("!repo"):
             args = message.content[5:].strip()
             if args:
-                # Cambiar de repositorio
-                if "/" not in args or len(args.split("/")) != 2:
-                    await message.channel.send("❌ Formato incorrecto. Uso: `!repo usuario/repositorio` o simplemente `!repo` para ver el actual.")
+                # Limpiar si el usuario pegó la URL completa de GitHub
+                if args.startswith("http://") or args.startswith("https://"):
+                    args = args.replace("https://github.com/", "").replace("http://github.com/", "")
+
+                # Extraer repositorio y rama si contiene /tree/ o /blob/
+                branch = None
+                repo_str = args
+                for indicator in ["/tree/", "/blob/"]:
+                    if indicator in args:
+                        parts = args.split(indicator, 1)
+                        repo_str = parts[0]
+                        branch = parts[1].strip()
+                        break
+
+                # Quedarnos con el formato usuario/repositorio
+                repo_parts = repo_str.split("/")
+                if len(repo_parts) < 2:
+                    await message.channel.send("❌ Formato incorrecto. Uso: `!repo usuario/repositorio` o la URL completa del repositorio.")
                     return
 
+                new_repo = f"{repo_parts[0]}/{repo_parts[1]}"
                 old_repo = self.github_repo
-                self.github_repo = args
+                old_branch = self.github_branch
+
+                self.github_repo = new_repo
+                self.github_branch = branch
 
                 async with aiohttp.ClientSession() as session:
                     url = f"https://api.github.com/repos/{self.github_repo}/commits?per_page=3"
+                    if self.github_branch:
+                        url += f"&sha={self.github_branch}"
+                        
                     headers = {}
                     if GITHUB_TOKEN:
                         headers["Authorization"] = f"token {GITHUB_TOKEN}"
@@ -116,15 +145,19 @@ class MasterBot(discord.Client):
                             # Guardar en disco para persistencia
                             try:
                                 with open(self.config_path, "w", encoding="utf-8") as f:
-                                    f.write(self.github_repo)
+                                    if self.github_branch:
+                                        f.write(f"{self.github_repo}:{self.github_branch}")
+                                    else:
+                                        f.write(self.github_repo)
                             except Exception as e:
                                 print(f"[ERROR] No se pudo guardar la configuración: {e}")
 
-                            await message.channel.send(f"✅ Repositorio de trabajo cambiado a: `{self.github_repo}`")
+                            branch_msg = f" (rama `{self.github_branch}`)" if self.github_branch else ""
+                            await message.channel.send(f"✅ Repositorio de trabajo cambiado a: `{self.github_repo}`{branch_msg}")
                             commits = await resp.json()
                             embed = discord.Embed(
-                                title=f"🚀 Últimos cambios en {self.github_repo}",
-                                url=f"https://github.com/{self.github_repo}",
+                                title=f"🚀 Últimos cambios en {self.github_repo}{branch_msg}",
+                                url=f"https://github.com/{self.github_repo}/tree/{self.github_branch}" if self.github_branch else f"https://github.com/{self.github_repo}",
                                 color=discord.Color.blue()
                             )
                             for c in commits:
@@ -135,22 +168,27 @@ class MasterBot(discord.Client):
                         else:
                             # Revertir si falla la conexión o no existe
                             self.github_repo = old_repo
+                            self.github_branch = old_branch
                             await message.channel.send(f"❌ Error al conectar con `{args}`. ¿Existe el repositorio y es público? Se ha mantenido el repositorio anterior: `{self.github_repo}`.")
             else:
                 # Ver repositorio actual
                 async with aiohttp.ClientSession() as session:
                     url = f"https://api.github.com/repos/{self.github_repo}/commits?per_page=3"
+                    if self.github_branch:
+                        url += f"&sha={self.github_branch}"
+                        
                     headers = {}
                     if GITHUB_TOKEN:
                         headers["Authorization"] = f"token {GITHUB_TOKEN}"
                     async with session.get(url, headers=headers) as resp:
                         if resp.status == 200:
                             commits = await resp.json()
+                            branch_msg = f" (rama `{self.github_branch}`)" if self.github_branch else ""
                             embed = discord.Embed(
-                                title=f"🚀 Repositorio activo: {self.github_repo}",
-                                url=f"https://github.com/{self.github_repo}",
+                                title=f"🚀 Repositorio activo: {self.github_repo}{branch_msg}",
+                                url=f"https://github.com/{self.github_repo}/tree/{self.github_branch}" if self.github_branch else f"https://github.com/{self.github_repo}",
                                 color=discord.Color.blue(),
-                                description="Usa `!repo usuario/repositorio` para cambiar el repositorio de trabajo."
+                                description="Usa `!repo usuario/repositorio` o copia una URL de GitHub para cambiar el repositorio de trabajo."
                             )
                             for c in commits:
                                 msg = c["commit"]["message"].split("\n")[0]

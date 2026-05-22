@@ -86,7 +86,13 @@ class MasterBot(discord.Client):
                         embed.add_field(name="Título", value=title)
                         await message.channel.send(embed=embed)
                     else:
-                        await message.channel.send("❌ Error al conectar con GitHub.")
+                        try:
+                            err_json = await resp.json()
+                            err_msg = err_json.get("message", "Error desconocido")
+                        except Exception:
+                            err_msg = await resp.text()
+                            err_msg = err_msg[:150]  # Limitar tamaño
+                        await message.channel.send(f"❌ Error al crear tarea en GitHub (Código {resp.status}): {err_msg}")
 
         # Comando !repo [usuario/proyecto] o !repo para ver el actual
         if message.content.startswith("!repo"):
